@@ -30,6 +30,22 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(clickhouse_cpp)
 
+FetchContent_Declare(
+    spdlog
+    GIT_REPOSITORY https://github.com/gabime/spdlog.git
+    GIT_TAG v1.14.1
+)
+FetchContent_MakeAvailable(spdlog)
+
+FetchContent_Declare(
+    prometheus_cpp
+    GIT_REPOSITORY https://github.com/jupp0r/prometheus-cpp.git
+    GIT_TAG v1.2.4
+)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(prometheus_cpp)
+
 if(WIN32)
     find_package(lz4 REQUIRED)
 else()
@@ -62,6 +78,9 @@ target_link_libraries(cavitation_monitor PRIVATE
     nlohmann_json::nlohmann_json
     httplib::httplib
     clickhouse-cpp-lib
+    spdlog::spdlog
+    prometheus-cpp::core
+    prometheus-cpp::push
 )
 
 if(WIN32)

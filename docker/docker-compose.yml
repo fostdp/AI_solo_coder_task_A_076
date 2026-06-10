@@ -1,0 +1,199 @@
+version: "3.8"
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.1
+    container_name: cavitation-clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+      - ../sql/init_clickhouse.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./clickhouse/config.xml:/etc/clickhouse-server/config.d/custom.xml:ro
+      - ./clickhouse/users.xml:/etc/clickhouse-server/users.d/custom.xml:ro
+    environment:
+      CLICKHOUSE_DB: cavitation_monitor
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "2.0"
+        reservations:
+          memory: 1G
+          cpus: "0.5"
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - cavitation-net
+
+  cavitation-monitor:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: cavitation-monitor
+    ports:
+      - "8080:8080"
+      - "9001:9000/udp"
+      - "9090:9090"
+    volumes:
+      - ../backend/config:/app/config:ro
+      - monitor_logs:/app/logs
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      CAVITATION_CH_HOST: clickhouse
+      CAVITATION_CH_PORT: "9000"
+      SPDLOG_LEVEL: info
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+        reservations:
+          memory: 512M
+          cpus: "0.5"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - cavitation-net
+
+  pxi-simulator:
+    build:
+      context: ..
+      dockerfile: docker/pxi-simulator/Dockerfile
+    container_name: pxi-simulator
+    depends_on:
+      cavitation-monitor:
+        condition: service_healthy
+    ports:
+      - "8091:8091"
+    environment:
+      PXI_TARGET_IP: cavitation-monitor
+      PXI_TARGET_PORT: "9000"
+      PXI_TURBINES: "6"
+      PXI_SAMPLE_RATE: "1000"
+      PXI_INTERVAL_MS: "1"
+      PXI_INJECT_PORT: "8091"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8091/health"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - cavitation-net
+
+  iec61850-simulator:
+    build:
+      context: ..
+      dockerfile: docker/iec61850-simulator/Dockerfile
+    container_name: iec61850-simulator
+    depends_on:
+      cavitation-monitor:
+        condition: service_healthy
+    ports:
+      - "102:102"
+      - "8092:8090"
+    environment:
+      IEC_LISTEN_PORT: "102"
+      IEC_HTTP_PORT: "8090"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8090/health"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - cavitation-net
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: cavitation-prometheus
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      - cavitation-monitor
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+    restart: unless-stopped
+    networks:
+      - cavitation-net
+
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: cavitation-frontend
+    ports:
+      - "3000:80"
+    volumes:
+      - ../frontend:/usr/share/nginx/html:ro
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - cavitation-monitor
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.25"
+    restart: unless-stopped
+    networks:
+      - cavitation-net
+
+volumes:
+  clickhouse_data:
+    driver: local
+  clickhouse_logs:
+    driver: local
+  monitor_logs:
+    driver: local
+  prometheus_data:
+    driver: local
+
+networks:
+  cavitation-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

@@ -23,4 +23,6 @@ private:
     FatigueAnalyzer analyzer_;
     std::thread thread_;
     std::atomic<bool> running_{false};
+    std::atomic<size_t> cycle_count_{0};
+    std::atomic<size_t> last_log_count_{0};
 };

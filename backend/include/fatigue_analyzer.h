@@ -80,6 +80,7 @@ public:
     void resetAccumulated(uint8_t turbine_id, uint8_t blade_id, uint8_t zone_id);
     void setCavitationFactor(float factor);
     void setDesignLifeHours(double hours);
+    double getDesignLifeHours() const { return design_life_hours_; }
 
 private:
     double interpolateSN(double stress_range, const SNCurve& sn_curve);

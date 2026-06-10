@@ -16,8 +16,12 @@ CREATE TABLE IF NOT EXISTS raw_signal
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp)
 ORDER BY (turbine_id, sensor_id, timestamp)
-TTL timestamp + INTERVAL 30 DAY
-SETTINGS index_granularity = 8192;
+TTL timestamp + INTERVAL 7 DAY,
+    timestamp + INTERVAL 3 DAY TO VOLUME 'cold'
+SETTINGS index_granularity = 8192,
+    storage_policy = 'tiered',
+    move_factor = 0.2,
+    storage_policy = 'tiered';
 
 CREATE TABLE IF NOT EXISTS spectrum_feature
 (
@@ -37,8 +41,11 @@ CREATE TABLE IF NOT EXISTS spectrum_feature
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp)
 ORDER BY (turbine_id, sensor_id, timestamp)
-TTL timestamp + INTERVAL 90 DAY
-SETTINGS index_granularity = 8192;
+TTL timestamp + INTERVAL 90 DAY,
+    timestamp + INTERVAL 30 DAY TO VOLUME 'cold'
+SETTINGS index_granularity = 8192,
+    move_factor = 0.2,
+    storage_policy = 'tiered';
 
 CREATE TABLE IF NOT EXISTS cavitation_status
 (
@@ -54,8 +61,11 @@ CREATE TABLE IF NOT EXISTS cavitation_status
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp)
 ORDER BY (turbine_id, blade_id, timestamp)
-TTL timestamp + INTERVAL 365 DAY
-SETTINGS index_granularity = 8192;
+TTL timestamp + INTERVAL 365 DAY,
+    timestamp + INTERVAL 90 DAY TO VOLUME 'cold'
+SETTINGS index_granularity = 8192,
+    move_factor = 0.2,
+    storage_policy = 'tiered';
 
 CREATE TABLE IF NOT EXISTS fatigue_damage
 (
@@ -74,8 +84,11 @@ CREATE TABLE IF NOT EXISTS fatigue_damage
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp)
 ORDER BY (turbine_id, blade_id, timestamp)
-TTL timestamp + INTERVAL 365 DAY
-SETTINGS index_granularity = 8192;
+TTL timestamp + INTERVAL 365 DAY,
+    timestamp + INTERVAL 90 DAY TO VOLUME 'cold'
+SETTINGS index_granularity = 8192,
+    move_factor = 0.2,
+    storage_policy = 'tiered';
 
 CREATE TABLE IF NOT EXISTS alarm_record
 (
@@ -93,8 +106,79 @@ CREATE TABLE IF NOT EXISTS alarm_record
 ENGINE = MergeTree()
 PARTITION BY toYYYYMMDD(timestamp)
 ORDER BY (turbine_id, timestamp)
-TTL timestamp + INTERVAL 180 DAY
+TTL timestamp + INTERVAL 180 DAY,
+    timestamp + INTERVAL 60 DAY TO VOLUME 'cold'
+SETTINGS index_granularity = 8192,
+    move_factor = 0.2,
+    storage_policy = 'tiered';
+
+CREATE TABLE IF NOT EXISTS cavitation_status_archive
+(
+    timestamp           DateTime64(3),
+    turbine_id          UInt8,
+    blade_id            UInt8,
+    zone_id             UInt8,
+    cavitation_stage    Enum8('none' = 0, 'incipient' = 1, 'critical' = 2, 'developed' = 3),
+    avg_intensity       Float32,
+    max_intensity       Float32,
+    anomaly_score_p95   Float32,
+    sample_count        UInt64
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (turbine_id, blade_id, timestamp)
+TTL timestamp + INTERVAL 3 YEAR
 SETTINGS index_granularity = 8192;
+
+CREATE TABLE IF NOT EXISTS fatigue_damage_archive
+(
+    timestamp           DateTime64(3),
+    turbine_id          UInt8,
+    blade_id            UInt8,
+    zone_id             UInt8,
+    max_stress_amplitude Float32,
+    total_cycle_count   UInt64,
+    max_miner_damage    Float64,
+    cumulative_damage   Float64,
+    min_remaining_life  Float64
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (turbine_id, blade_id, timestamp)
+TTL timestamp + INTERVAL 5 YEAR
+SETTINGS index_granularity = 8192;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS cavitation_status_daily_mv
+TO cavitation_status_archive
+AS
+SELECT
+    toStartOfDay(timestamp) AS timestamp,
+    turbine_id,
+    blade_id,
+    zone_id,
+    cavitation_stage,
+    avg(cavitation_intensity) AS avg_intensity,
+    max(cavitation_intensity) AS max_intensity,
+    quantile(0.95)(anomaly_score) AS anomaly_score_p95,
+    count() AS sample_count
+FROM cavitation_status
+GROUP BY timestamp, turbine_id, blade_id, zone_id, cavitation_stage;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS fatigue_damage_daily_mv
+TO fatigue_damage_archive
+AS
+SELECT
+    toStartOfDay(timestamp) AS timestamp,
+    turbine_id,
+    blade_id,
+    zone_id,
+    max(stress_amplitude) AS max_stress_amplitude,
+    sum(cycle_count) AS total_cycle_count,
+    max(miner_damage) AS max_miner_damage,
+    max(cumulative_damage) AS cumulative_damage,
+    min(remaining_life_hours) AS min_remaining_life
+FROM fatigue_damage
+GROUP BY timestamp, turbine_id, blade_id, zone_id;
 
 CREATE TABLE IF NOT EXISTS turbine_config
 (
@@ -156,5 +240,5 @@ INSERT INTO sensor_config (sensor_id, turbine_id, sensor_type, location, blade_i
 (16, 1, 'accelerometer',  'runner_inlet',        1,    1,    1000, 100.0,  '2025-01-10'),
 (17, 1, 'accelerometer',  'runner_inlet',        1,    2,    1000, 100.0,  '2025-01-10'),
 (18, 1, 'accelerometer',  'blade_channel',       2,    1,    1000, 100.0,  '2025-01-10'),
-(19, 1, 'accelerometer',  'blade_channel',       2,    2,    1000, 1000, 100.0,  '2025-01-10'),
+(19, 1, 'accelerometer',  'blade_channel',       2,    2,    1000, 100.0,  '2025-01-10'),
 (20, 1, 'accelerometer',  'draft_tube',          4,    1,    1000, 100.0,  '2025-01-10');

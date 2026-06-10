@@ -1,5 +1,7 @@
 #include "pxi_collector.h"
 
+#include <spdlog/spdlog.h>
+
 PXICollector::PXICollector(uint16_t port, const ModelConfig& config)
     : port_(port), config_(config), signal_processor_() {
     signal_processor_.setSampleRate(config_.sample_rate);
@@ -12,10 +14,12 @@ bool PXICollector::start() {
     });
 
     if (!udp_receiver_->start()) {
+        spdlog::error("PXICollector: failed to start UDP receiver on port {}", port_);
         return false;
     }
 
     running_.store(true, std::memory_order_release);
+    spdlog::info("PXICollector: started on UDP port {}, sample_rate={:.0f}Hz", port_, config_.sample_rate);
     return true;
 }
 
@@ -24,6 +28,8 @@ void PXICollector::stop() {
         udp_receiver_->stop();
     }
     running_.store(false, std::memory_order_release);
+    spdlog::info("PXICollector: stopped (received={}, dropped={})",
+        getReceivedPackets(), getDroppedPackets());
 }
 
 bool PXICollector::isRunning() {
@@ -48,6 +54,9 @@ void PXICollector::onDataReceived(const SensorData& data) {
     SpectrumFeature feature = signal_processor_.computeSpectralFeatures(data);
     CollectorOutput out{data, std::move(feature)};
     if (!output_queue.tryPush(out)) {
-        dropped_count_.fetch_add(1, std::memory_order_relaxed);
+        size_t d = dropped_count_.fetch_add(1, std::memory_order_relaxed);
+        if (d > 0 && d % 1000 == 0) {
+            spdlog::warn("PXICollector: output queue full, {} packets dropped", d);
+        }
     }
 }

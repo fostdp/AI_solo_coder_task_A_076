@@ -51,6 +51,14 @@
   "server": {
     "udp_port": 9000,
     "api_port": 8080,
-    "clickhouse_connection": "host=localhost;port=9000;user=default;database=cavitation_monitor"
+    "prometheus_port": 9090,
+    "clickhouse_connection": "host=clickhouse;port=9000;user=default;database=cavitation_monitor"
+  },
+  "logging": {
+    "level": "info",
+    "log_dir": "logs",
+    "max_file_size_mb": 10,
+    "max_files": 5,
+    "flush_on_warning": true
   }
 }

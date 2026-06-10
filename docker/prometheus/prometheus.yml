@@ -1,0 +1,22 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'cavitation-monitor'
+    scrape_interval: 5s
+    static_configs:
+      - targets: ['cavitation-monitor:9090']
+        labels:
+          service: 'cavitation-monitor'
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'cavitation_.*'
+        action: keep
+
+  - job_name: 'clickhouse'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['clickhouse:9363']
+        labels:
+          service: 'clickhouse'

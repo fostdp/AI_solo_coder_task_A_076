@@ -4,7 +4,10 @@
 #include <cmath>
 #include <numeric>
 
-FatigueService::FatigueService(const ModelConfig& config) {
+#include <spdlog/spdlog.h>
+
+FatigueService::FatigueService(const ModelConfig& config)
+    : cycle_count_(0), last_log_count_(0) {
     analyzer_.setCavitationFactor(config.cavitation_factor);
     analyzer_.setDesignLifeHours(config.design_life_hours);
 }
@@ -15,6 +18,8 @@ bool FatigueService::start() {
         return false;
     }
     thread_ = std::thread(&FatigueService::processingLoop, this);
+    spdlog::info("FatigueService: started (streaming rainflow + Miner, design_life={:.0f}h)",
+        analyzer_.getDesignLifeHours());
     return true;
 }
 
@@ -23,6 +28,7 @@ void FatigueService::stop() {
     if (thread_.joinable()) {
         thread_.join();
     }
+    spdlog::info("FatigueService: stopped (total cycles analyzed={})", cycle_count_.load());
 }
 
 bool FatigueService::isRunning() {
@@ -30,6 +36,7 @@ bool FatigueService::isRunning() {
 }
 
 void FatigueService::processingLoop() {
+    auto last_log_time = std::chrono::steady_clock::now();
     while (running_.load()) {
         DetectorOutput det_out;
         if (input_queue.tryPop(det_out)) {
@@ -46,6 +53,7 @@ void FatigueService::processingLoop() {
                     det_out.cavitation.zone_id,
                     stress,
                     det_out.cavitation.intensity);
+                cycle_count_.fetch_add(1, std::memory_order_relaxed);
             }
 
             float vibration_velocity = 0.0f;
@@ -60,6 +68,21 @@ void FatigueService::processingLoop() {
 
             EvaluatorOutput eval_out{det_out.cavitation, fatigue, vibration_velocity};
             output_queue.tryPush(eval_out);
+
+            if (fatigue.cumulative_damage > 0.5 && fatigue.turbine_id > 0) {
+                spdlog::warn("FatigueService: turbine={} blade={} damage={:.2f}% remaining={:.0f}h",
+                    fatigue.turbine_id, fatigue.blade_id,
+                    fatigue.cumulative_damage * 100, fatigue.remaining_life_hours);
+            }
+
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_log_time);
+            if (elapsed.count() >= 60) {
+                size_t current = cycle_count_.load(std::memory_order_relaxed);
+                size_t delta = current - last_log_count_.exchange(current);
+                spdlog::info("FatigueService: {} cycles analyzed in last 60s (total={})", delta, current);
+                last_log_time = now;
+            }
         } else {
             std::this_thread::sleep_for(std::chrono::microseconds(100));
         }

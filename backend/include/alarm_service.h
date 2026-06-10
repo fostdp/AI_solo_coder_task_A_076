@@ -32,9 +32,12 @@ private:
 
     AlarmManager alarm_manager_;
     ClickHouseWriter clickhouse_writer_;
+    ModelConfig config_;
 
     std::thread thread_;
     std::atomic<bool> running_{false};
+    std::atomic<size_t> alarm_count_{0};
+    std::atomic<size_t> iec_sent_count_{0};
 
     std::mutex state_mutex_;
     std::unordered_map<uint8_t, CavitationStatus> latest_cavitation_;

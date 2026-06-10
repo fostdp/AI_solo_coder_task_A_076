@@ -1,5 +1,6 @@
 import { cavitationStageColor, alarmSeverityColor, stageToChineseLabel } from './colorScales.js';
-import { drawTurbineProfile, drawSensorMarkers, drawBladeInfo, hitTestBlade, BLADE_COUNT } from './canvasRenderer.js';
+import { Turbine3DViewer, BLADE_COUNT } from './turbine_3d_viewer.js';
+import { BladeDetailPanel, formatDuration, stageBadgeHTML, severityBadgeHTML } from './blade_detail.js';
 import { initWaterfallGL, updateWaterfallData, renderWaterfall, drawWaterfallOverlay, cleanupWaterfallGL, createWaterfallWorker, MAX_SLICES } from './webglRenderer.js';
 import { generateTurbineStatuses, generateSpectrumData, generateWaterfallData, generateCavitationHistory, generateAlarms, generateFatigueInfo } from './mockData.js';
 
@@ -9,6 +10,8 @@ var state = {
     selectedTurbine: null,
     selectedBlade: null,
     bladePanelOpen: false,
+    turbineViewer: null,
+    bladePanel: null,
     alarms: [],
     waterfallGL: null,
     waterfallWorker: null,
@@ -176,23 +179,6 @@ function formatTime(ts) {
         String(d.getHours()).padStart(2, '0') + ':' +
         String(d.getMinutes()).padStart(2, '0') + ':' +
         String(d.getSeconds()).padStart(2, '0');
-}
-
-function formatDuration(hours) {
-    if (hours <= 0) return '0h';
-    if (hours < 24) return Math.round(hours) + 'h';
-    if (hours < 8760) return (hours / 24).toFixed(1) + '天';
-    return (hours / 8760).toFixed(1) + '年';
-}
-
-function stageBadgeHTML(stage) {
-    return '<span class="badge badge-' + stage + '">' + stageToChineseLabel(stage) + '</span>';
-}
-
-function severityBadgeHTML(sev) {
-    var cls = sev === 'critical' ? 'badge-critical-alarm' : 'badge-' + sev;
-    var labels = { info: '提示', warning: '警告', critical: '紧急' };
-    return '<span class="badge ' + cls + '">' + labels[sev] + '</span>';
 }
 
 function alarmTypeLabel(type) {
@@ -372,31 +358,11 @@ function initTurbineCanvas(turbine) {
     var dpr = window.devicePixelRatio || 1;
     canvas.width = rect.width * dpr;
     canvas.height = rect.height * dpr;
-    var ctx = canvas.getContext('2d');
-    ctx.scale(dpr, dpr);
+
+    state.turbineViewer = new Turbine3DViewer(canvas);
 
     function animate(time) {
-        ctx.clearRect(0, 0, rect.width, rect.height);
-        drawTurbineProfile(ctx, rect.width, rect.height, turbine.blade_statuses, state.selectedBlade, time);
-        drawSensorMarkers(ctx, rect.width / 2, rect.height * 0.42, Math.min(rect.width, rect.height) * 0.22, Math.min(rect.width, rect.height) * 0.37);
-
-        if (state.selectedBlade && state.bladePanelOpen) {
-            var cx = rect.width / 2;
-            var cy = rect.height * 0.42;
-            var r = Math.min(rect.width, rect.height) * 0.22;
-            var angle = ((state.selectedBlade - 1) / BLADE_COUNT) * Math.PI * 2 - Math.PI / 2;
-            var bx = cx + r * 0.6 * Math.cos(angle);
-            var by = cy + r * 0.6 * Math.sin(angle);
-            var bladeSt = null;
-            for (var i = 0; i < turbine.blade_statuses.length; i++) {
-                if (turbine.blade_statuses[i].blade_id === state.selectedBlade && turbine.blade_statuses[i].zone_id === 1) {
-                    bladeSt = turbine.blade_statuses[i];
-                    break;
-                }
-            }
-            drawBladeInfo(ctx, bx, by, state.selectedBlade, bladeSt, state.fatigueInfo);
-        }
-
+        state.turbineViewer.render(turbine.blade_statuses, state.selectedBlade, time);
         state.animFrame = requestAnimationFrame(animate);
     }
 
@@ -404,17 +370,13 @@ function initTurbineCanvas(turbine) {
         var canvasRect = canvas.getBoundingClientRect();
         var x = e.clientX - canvasRect.left;
         var y = e.clientY - canvasRect.top;
-        var cx = rect.width / 2;
-        var cy = rect.height * 0.42;
-        var r = Math.min(rect.width, rect.height) * 0.22;
-
-        var bladeId = hitTestBlade(x, y, cx, cy, r, BLADE_COUNT);
+        var bladeId = state.turbineViewer.hitTest(x, y);
         if (bladeId > 0) {
             state.selectedBlade = bladeId;
             state.bladePanelOpen = true;
             state.cavitationHistory = generateCavitationHistory(24);
             state.fatigueInfo = generateFatigueInfo();
-            renderBladePanelContent();
+            showBladePanel(turbine);
         }
     });
 
@@ -580,186 +542,21 @@ function renderRealtimeMetrics(turbine) {
     }).join('');
 }
 
+function showBladePanel(turbine) {
+    if (!state.bladePanel) {
+        state.bladePanel = new BladeDetailPanel($('#main-content'));
+    }
+    var bladeStatuses = turbine.blade_statuses.filter(function (b) { return b.blade_id === state.selectedBlade; });
+    state.bladePanel.show(state.selectedBlade, bladeStatuses, state.fatigueInfo, state.cavitationHistory);
+}
+
 function renderBladePanel() {
-    return '<div class="panel-overlay" id="panel-overlay"></div>' +
-        '<div class="detail-panel" id="blade-panel">' +
-            '<div class="detail-panel-header">' +
-                '<div class="detail-panel-title" id="blade-panel-title">叶片详情</div>' +
-                '<button class="detail-panel-close" id="blade-panel-close">✕</button>' +
-            '</div>' +
-            '<div class="detail-panel-body" id="blade-panel-body"></div>' +
-        '</div>';
+    return '';
 }
 
 function renderBladePanelContent() {
-    var title = $('#blade-panel-title');
-    var body = $('#blade-panel-body');
-    var overlay = $('#panel-overlay');
-    var closeBtn = $('#blade-panel-close');
-
-    if (!title || !body) {
-        if (state.currentPage === 'turbine-detail') {
-            renderTurbineDetail($('#main-content'));
-            requestAnimationFrame(function () { renderBladePanelContent(); });
-        }
-        return;
-    }
-
-    title.textContent = '叶片 #' + state.selectedBlade + ' 详情';
-
     var turbine = state.turbines[state.selectedTurbine - 1] || state.turbines[0];
-    var bladeStatuses = turbine.blade_statuses.filter(function (b) { return b.blade_id === state.selectedBlade; });
-
-    var zonesHTML = bladeStatuses.map(function (bs) {
-        var zoneNames = { 1: '进口边', 2: '通道中', 3: '出口边' };
-        return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(30,58,95,0.3)">' +
-            '<div style="display:flex;align-items:center;gap:8px">' +
-                '<span style="font-size:13px;color:var(--text-primary)">' + (zoneNames[bs.zone_id] || '区域' + bs.zone_id) + '</span>' +
-                stageBadgeHTML(bs.stage) +
-            '</div>' +
-            '<div style="font-size:12px;font-family:var(--font-mono);color:var(--text-secondary)">' + (bs.intensity * 100).toFixed(1) + '%</div>' +
-        '</div>';
-    }).join('');
-
-    var fatigue = state.fatigueInfo;
-    var damagePct = fatigue ? (fatigue.cumulative_damage * 100) : 0;
-    var barClass = damagePct > 75 ? 'purple' : damagePct > 50 ? 'red' : damagePct > 25 ? 'yellow' : 'green';
-
-    var historyHTML = '';
-    var histCanvasId = 'history-canvas';
-
-    body.innerHTML =
-        '<div style="margin-bottom:16px">' +
-            '<div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:8px">各区域空化状态</div>' +
-            zonesHTML +
-        '</div>' +
-        '<div style="margin-bottom:16px">' +
-            '<div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:8px">疲劳损伤评估</div>' +
-            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">' +
-                '<div style="background:var(--bg-primary);border-radius:var(--radius-md);padding:10px;text-align:center">' +
-                    '<div style="font-size:10px;color:var(--text-muted)">累积损伤</div>' +
-                    '<div style="font-size:18px;font-weight:700;font-family:var(--font-mono);color:' + (damagePct > 50 ? 'var(--cav-critical)' : 'var(--text-primary)') + '">' + damagePct.toFixed(2) + '%</div>' +
-                '</div>' +
-                '<div style="background:var(--bg-primary);border-radius:var(--radius-md);padding:10px;text-align:center">' +
-                    '<div style="font-size:10px;color:var(--text-muted)">剩余寿命</div>' +
-                    '<div style="font-size:18px;font-weight:700;font-family:var(--font-mono);color:var(--accent)">' + (fatigue ? formatDuration(fatigue.remaining_life_hours) : '—') + '</div>' +
-                '</div>' +
-            '</div>' +
-            '<div class="fatigue-bar">' +
-                '<div class="fatigue-label"><span>Miner累积损伤</span><span>' + damagePct.toFixed(2) + '%</span></div>' +
-                '<div class="progress-bar" style="height:8px;margin-top:4px">' +
-                    '<div class="progress-bar-fill ' + barClass + '" style="width:' + Math.min(100, damagePct) + '%"></div>' +
-                '</div>' +
-            '</div>' +
-            '<div style="margin-top:8px;font-size:11px;color:var(--text-muted);font-family:var(--font-mono)">循环次数: ' + (fatigue ? fatigue.cycle_count.toLocaleString() : '—') + '</div>' +
-        '</div>' +
-        '<div style="margin-bottom:16px">' +
-            '<div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:8px">空化历史趋势 (24h)</div>' +
-            '<div class="canvas-container" style="aspect-ratio:2/1">' +
-                '<canvas id="' + histCanvasId + '" style="width:100%;height:100%"></canvas>' +
-            '</div>' +
-        '</div>' +
-        '<div>' +
-            '<div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:8px">异常分数</div>' +
-            '<div style="display:flex;gap:10px">' +
-                bladeStatuses.map(function (bs) {
-                    return '<div style="flex:1;text-align:center;background:var(--bg-primary);border-radius:var(--radius-md);padding:8px">' +
-                        '<div style="font-size:10px;color:var(--text-muted)">区域' + bs.zone_id + '</div>' +
-                        '<div style="font-size:16px;font-weight:700;font-family:var(--font-mono);color:' + (bs.anomaly_score > 0.5 ? 'var(--cav-critical)' : 'var(--text-primary)') + '">' + bs.anomaly_score.toFixed(3) + '</div>' +
-                    '</div>';
-                }).join('') +
-            '</div>' +
-        '</div>';
-
-    if (closeBtn) {
-        closeBtn.addEventListener('click', function () {
-            state.bladePanelOpen = false;
-            state.selectedBlade = null;
-            var panel = $('#blade-panel');
-            var overlay = $('#panel-overlay');
-            if (panel) panel.remove();
-            if (overlay) overlay.remove();
-        });
-    }
-    if (overlay) {
-        overlay.addEventListener('click', function () {
-            if (closeBtn) closeBtn.click();
-        });
-    }
-
-    requestAnimationFrame(function () {
-        drawHistoryChart(histCanvasId);
-    });
-}
-
-function drawHistoryChart(canvasId) {
-    var canvas = document.getElementById(canvasId);
-    if (!canvas) return;
-
-    var rect = canvas.parentElement.getBoundingClientRect();
-    var dpr = window.devicePixelRatio || 1;
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    var ctx = canvas.getContext('2d');
-    ctx.scale(dpr, dpr);
-
-    var history = state.cavitationHistory;
-    if (!history || history.length === 0) return;
-
-    var margin = { top: 10, right: 10, bottom: 24, left: 40 };
-    var plotW = rect.width - margin.left - margin.right;
-    var plotH = rect.height - margin.top - margin.bottom;
-
-    ctx.strokeStyle = '#1E3A5F';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(margin.left, margin.top);
-    ctx.lineTo(margin.left, margin.top + plotH);
-    ctx.lineTo(margin.left + plotW, margin.top + plotH);
-    ctx.stroke();
-
-    ctx.font = '9px "JetBrains Mono", monospace';
-    ctx.fillStyle = '#556688';
-    ctx.textAlign = 'right';
-    for (var v = 0; v <= 4; v++) {
-        var vy = margin.top + plotH - (v / 4) * plotH;
-        ctx.fillText((v * 25) + '%', margin.left - 4, vy + 3);
-    }
-
-    var stageYMap = { none: 0.1, incipient: 0.35, critical: 0.65, developed: 0.9 };
-
-    ctx.beginPath();
-    ctx.strokeStyle = '#00D4FF';
-    ctx.lineWidth = 1.5;
-    for (var i = 0; i < history.length; i++) {
-        var x = margin.left + (i / (history.length - 1)) * plotW;
-        var y = margin.top + plotH - history[i].intensity * plotH;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.fillStyle = 'rgba(0, 212, 255, 0.08)';
-    for (var j = 0; j < history.length; j++) {
-        var hx = margin.left + (j / (history.length - 1)) * plotW;
-        var hy = margin.top + plotH - history[j].intensity * plotH;
-        if (j === 0) ctx.moveTo(hx, hy);
-        else ctx.lineTo(hx, hy);
-    }
-    ctx.lineTo(margin.left + plotW, margin.top + plotH);
-    ctx.lineTo(margin.left, margin.top + plotH);
-    ctx.closePath();
-    ctx.fill();
-
-    var stages = ['none', 'incipient', 'critical', 'developed'];
-    var stageColors = { none: 'rgba(46,204,113,0.15)', incipient: 'rgba(243,156,18,0.15)', critical: 'rgba(231,76,60,0.15)', developed: 'rgba(142,68,173,0.15)' };
-    for (var s = 0; s < stages.length; s++) {
-        var sy0 = margin.top + plotH - stageYMap[stages[s]] * plotH - plotH * 0.1;
-        var sy1 = margin.top + plotH - (s < stages.length - 1 ? stageYMap[stages[s + 1]] : 1) * plotH + plotH * 0.1;
-        ctx.fillStyle = stageColors[stages[s]];
-        ctx.fillRect(margin.left, Math.max(margin.top, sy1), plotW, Math.min(plotH, sy0 - sy1));
-    }
+    showBladePanel(turbine);
 }
 
 function renderAlarmsPage(container) {

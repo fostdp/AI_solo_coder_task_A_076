@@ -3,7 +3,7 @@
 #include <vector>
 #include <cstddef>
 
-#include "types.h"
+#include "common.h"
 
 class SignalProcessor {
 public:

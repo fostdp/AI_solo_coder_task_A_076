@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <vector>
 
-#include "types.h"
+#include "common.h"
 
 struct RainflowCycle {
     float range;

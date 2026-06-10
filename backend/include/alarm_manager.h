@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-#include "types.h"
+#include "common.h"
 
 struct AlarmThreshold {
     double cavitation_intensity_limit{0.5};

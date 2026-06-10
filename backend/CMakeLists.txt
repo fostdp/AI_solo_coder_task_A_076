@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(cavitation_monitor VERSION 1.0.0 LANGUAGES CXX)
+project(cavitation_monitor VERSION 2.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -39,11 +39,16 @@ endif()
 
 add_executable(cavitation_monitor
     src/main.cpp
+    src/config_loader.cpp
     src/udp_receiver.cpp
     src/signal_processor.cpp
+    src/pxi_collector.cpp
     src/cavitation_detector.cpp
+    src/cavitation_service.cpp
     src/fatigue_analyzer.cpp
+    src/fatigue_service.cpp
     src/alarm_manager.cpp
+    src/alarm_service.cpp
     src/clickhouse_writer.cpp
     src/api_server.cpp
 )

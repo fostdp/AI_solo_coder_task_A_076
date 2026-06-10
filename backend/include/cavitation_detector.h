@@ -6,7 +6,7 @@
 #include <random>
 #include <vector>
 
-#include "types.h"
+#include "common.h"
 
 struct IsolationTree {
     int split_feature{-1};

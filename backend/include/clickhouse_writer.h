@@ -10,7 +10,7 @@
 
 #include <clickhouse/client.h>
 
-#include "types.h"
+#include "common.h"
 
 class ClickHouseWriter {
 public:

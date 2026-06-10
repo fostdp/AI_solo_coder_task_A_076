@@ -1,0 +1,56 @@
+{
+  "isolation_forest": {
+    "n_trees": 100,
+    "sample_size": 256
+  },
+  "autoencoder": {
+    "input_dim": 19,
+    "encoding_dim": 16,
+    "learning_rate": 0.001,
+    "train_epochs": 50,
+    "warmstart_epochs": 5,
+    "warmstart_lr_factor": 0.1
+  },
+  "ensemble": {
+    "if_weight": 0.6,
+    "ae_weight": 0.4
+  },
+  "adaptive_threshold": {
+    "base_incipient": 0.3,
+    "base_critical": 0.5,
+    "base_developed": 0.7,
+    "window_size": 512,
+    "max_offset": 0.15
+  },
+  "condition_normalization": {
+    "shift_tolerance": 0.15,
+    "warmstart_pool_size": 256,
+    "history_size": 512,
+    "head_tolerance": 5.0,
+    "power_tolerance": 20.0
+  },
+  "fatigue": {
+    "cavitation_factor": 1.5,
+    "design_life_hours": 100000
+  },
+  "sn_curve": {
+    "N": [100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000],
+    "S": [620.0, 480.0, 380.0, 300.0, 240.0, 200.0, 180.0, 170.0]
+  },
+  "signal_processing": {
+    "sample_rate": 50000,
+    "fft_size": 512,
+    "wavelet_levels": 4
+  },
+  "alarm_thresholds": {
+    "cavitation_intensity_limit": 0.6,
+    "cavitation_developed_limit": 0.8,
+    "vibration_velocity_limit": 5.0,
+    "fatigue_damage_limit": 0.7
+  },
+  "server": {
+    "udp_port": 9000,
+    "api_port": 8080,
+    "clickhouse_connection": "host=localhost;port=9000;user=default;database=cavitation_monitor"
+  }
+}

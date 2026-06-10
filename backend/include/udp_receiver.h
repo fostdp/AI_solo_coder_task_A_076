@@ -21,7 +21,7 @@
 #endif
 #endif
 
-#include "types.h"
+#include "common.h"
 
 class SPSCRingBuffer {
 public:

@@ -9,7 +9,7 @@
 
 #include <httplib.h>
 
-#include "types.h"
+#include "common.h"
 
 class ApiServer {
 public:

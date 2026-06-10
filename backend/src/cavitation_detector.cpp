@@ -125,6 +125,148 @@ float IsolationForest::score(const std::vector<float>& sample) {
     return computeAnomalyScore(avg_path);
 }
 
+void FeatureNormalizer::update(const std::vector<float>& features, const OperatingCondition& cond) {
+    if (dim_ == 0) {
+        dim_ = static_cast<int>(features.size());
+        running_mean_.resize(dim_, 0.0f);
+        running_m2_.resize(dim_, 0.0f);
+        cached_mean_.resize(dim_, 0.0f);
+        cached_std_.resize(dim_, 1.0f);
+    }
+
+    int bin_idx = findOrAddBin(cond);
+    ConditionBin& bin = bins_[bin_idx];
+    bin.count++;
+
+    if (bin.mean.empty()) {
+        bin.mean = features;
+        bin.stddev.resize(dim_, 1.0f);
+    } else {
+        float alpha = 1.0f / static_cast<float>(bin.count);
+        for (int i = 0; i < dim_; i++) {
+            bin.mean[i] += alpha * (features[i] - bin.mean[i]);
+            float diff = features[i] - bin.mean[i];
+            float old_std = bin.stddev[i];
+            bin.stddev[i] = std::max(0.001f,
+                std::sqrt(old_std * old_std * (1.0f - alpha) + diff * diff * alpha));
+        }
+    }
+
+    cached_mean_ = bin.mean;
+    cached_std_ = bin.stddev;
+    count_++;
+}
+
+std::vector<float> FeatureNormalizer::normalize(const std::vector<float>& features) const {
+    std::vector<float> result(features.size());
+    for (size_t i = 0; i < features.size(); i++) {
+        result[i] = (features[i] - cached_mean_[i]) / cached_std_[i];
+        result[i] = std::max(-5.0f, std::min(5.0f, result[i]));
+    }
+    return result;
+}
+
+void FeatureNormalizer::reset() {
+    bins_.clear();
+    current_bin_ = -1;
+    count_ = 0;
+}
+
+int FeatureNormalizer::findOrAddBin(const OperatingCondition& cond) {
+    static constexpr float HEAD_TOL = 5.0f;
+    static constexpr float POWER_TOL = 20.0f;
+
+    for (int i = 0; i < static_cast<int>(bins_.size()); i++) {
+        float head_diff = std::abs(bins_[i].cond.head - cond.head);
+        float power_diff = std::abs(bins_[i].cond.power - cond.power);
+        if (head_diff < HEAD_TOL && power_diff < POWER_TOL) {
+            current_bin_ = i;
+            return i;
+        }
+    }
+
+    ConditionBin new_bin;
+    new_bin.cond = cond;
+    bins_.push_back(std::move(new_bin));
+
+    if (bins_.size() > HISTORY_SIZE) {
+        bins_.pop_front();
+    }
+
+    current_bin_ = static_cast<int>(bins_.size()) - 1;
+    return current_bin_;
+}
+
+AdaptiveThreshold::AdaptiveThreshold(float base_incipient, float base_critical, float base_developed)
+    : base_incipient_(base_incipient), base_critical_(base_critical),
+      base_developed_(base_developed) {}
+
+void AdaptiveThreshold::update(float anomaly_score) {
+    score_window_.push_back(anomaly_score);
+    if (score_window_.size() > WINDOW_SIZE) {
+        score_window_.pop_front();
+    }
+    recompute();
+}
+
+CavitationStage AdaptiveThreshold::classify(float intensity) const {
+    float incip = base_incipient_ + adaptive_offset_;
+    float crit = base_critical_ + adaptive_offset_;
+    float devel = base_developed_ + adaptive_offset_;
+
+    if (intensity < incip) return CavitationStage::NONE;
+    if (intensity < crit) return CavitationStage::INCIPIENT;
+    if (intensity < devel) return CavitationStage::CRITICAL;
+    return CavitationStage::DEVELOPED;
+}
+
+float AdaptiveThreshold::getIncipientThreshold() const {
+    return base_incipient_ + adaptive_offset_;
+}
+
+float AdaptiveThreshold::getCriticalThreshold() const {
+    return base_critical_ + adaptive_offset_;
+}
+
+float AdaptiveThreshold::getDevelopedThreshold() const {
+    return base_developed_ + adaptive_offset_;
+}
+
+void AdaptiveThreshold::recompute() {
+    if (score_window_.size() < 32) {
+        adaptive_offset_ = 0.0f;
+        return;
+    }
+
+    float mu = meanScore();
+    float sigma = stdScore();
+
+    float shift = mu + 3.0f * sigma - base_incipient_;
+    if (shift > 0.0f) {
+        adaptive_offset_ = std::min(0.15f, shift * 0.5f);
+    } else {
+        adaptive_offset_ = 0.0f;
+    }
+}
+
+float AdaptiveThreshold::meanScore() const {
+    if (score_window_.empty()) return 0.0f;
+    float sum = 0.0f;
+    for (float s : score_window_) sum += s;
+    return sum / static_cast<float>(score_window_.size());
+}
+
+float AdaptiveThreshold::stdScore() const {
+    if (score_window_.size() < 2) return 1.0f;
+    float mu = meanScore();
+    float sum2 = 0.0f;
+    for (float s : score_window_) {
+        float d = s - mu;
+        sum2 += d * d;
+    }
+    return std::sqrt(sum2 / static_cast<float>(score_window_.size() - 1));
+}
+
 DeepAutoEncoder::DeepAutoEncoder(int input_dim, int encoding_dim, float learning_rate)
     : input_dim_(input_dim), encoding_dim_(encoding_dim), learning_rate_(learning_rate) {
     encoder_dims_ = {64, 32, encoding_dim};
@@ -313,12 +455,74 @@ void DeepAutoEncoder::backward(const std::vector<float>& input,
 }
 
 void DeepAutoEncoder::train(const std::vector<std::vector<float>>& data, int epochs) {
+    baseline_recon_errors_.clear();
+
     for (int epoch = 0; epoch < epochs; epoch++) {
         for (const auto& sample : data) {
             std::vector<float> output = forward(sample);
             backward(sample, output, learning_rate_);
         }
     }
+
+    for (const auto& sample : data) {
+        std::vector<float> output = forward(sample);
+        float mse = 0.0f;
+        for (size_t i = 0; i < sample.size(); i++) {
+            float diff = sample[i] - output[i];
+            mse += diff * diff;
+        }
+        mse /= static_cast<float>(sample.size());
+        baseline_recon_errors_.push_back(mse);
+    }
+
+    if (!baseline_recon_errors_.empty()) {
+        float sum = 0.0f;
+        for (float e : baseline_recon_errors_) sum += e;
+        baseline_mean_ = sum / static_cast<float>(baseline_recon_errors_.size());
+        float var = 0.0f;
+        for (float e : baseline_recon_errors_) {
+            float d = e - baseline_mean_;
+            var += d * d;
+        }
+        baseline_std_ = std::sqrt(var / static_cast<float>(baseline_recon_errors_.size()));
+        if (baseline_std_ < 1e-6f) baseline_std_ = 1e-6f;
+    }
+}
+
+void DeepAutoEncoder::warmStart(const std::vector<std::vector<float>>& recent_data, int epochs) {
+    if (recent_data.empty()) return;
+
+    float warmup_lr = learning_rate_ * 0.1f;
+
+    for (int epoch = 0; epoch < epochs; epoch++) {
+        for (const auto& sample : recent_data) {
+            std::vector<float> output = forward(sample);
+            backward(sample, output, warmup_lr);
+        }
+    }
+
+    baseline_recon_errors_.clear();
+    for (const auto& sample : recent_data) {
+        std::vector<float> output = forward(sample);
+        float mse = 0.0f;
+        for (size_t i = 0; i < sample.size(); i++) {
+            float diff = sample[i] - output[i];
+            mse += diff * diff;
+        }
+        mse /= static_cast<float>(sample.size());
+        baseline_recon_errors_.push_back(mse);
+    }
+
+    float sum = 0.0f;
+    for (float e : baseline_recon_errors_) sum += e;
+    baseline_mean_ = sum / static_cast<float>(baseline_recon_errors_.size());
+    float var = 0.0f;
+    for (float e : baseline_recon_errors_) {
+        float d = e - baseline_mean_;
+        var += d * d;
+    }
+    baseline_std_ = std::sqrt(var / static_cast<float>(baseline_recon_errors_.size()));
+    if (baseline_std_ < 1e-6f) baseline_std_ = 1e-6f;
 }
 
 std::vector<float> DeepAutoEncoder::reconstruct(const std::vector<float>& input) {
@@ -333,16 +537,67 @@ float DeepAutoEncoder::anomalyScore(const std::vector<float>& input) {
         mse += diff * diff;
     }
     mse /= static_cast<float>(input.size());
+
+    if (baseline_std_ > 1e-6f) {
+        float normalized_mse = (mse - baseline_mean_) / baseline_std_;
+        return 1.0f - std::exp(-std::max(0.0f, normalized_mse) * 0.5f);
+    }
+
     return 1.0f - std::exp(-mse);
 }
 
 CavitationDetector::CavitationDetector(int input_dim, const Thresholds& thresholds)
     : thresholds_(thresholds), input_dim_(input_dim),
-      isolation_forest_(100, 256), autoencoder_(input_dim, 16, 0.001f) {}
+      isolation_forest_(100, 256), autoencoder_(input_dim, 16, 0.001f),
+      adaptive_threshold_(thresholds.incipient_intensity,
+                          thresholds.critical_intensity,
+                          thresholds.developed_intensity) {}
 
 void CavitationDetector::train(const std::vector<std::vector<float>>& normal_data, int epochs) {
     isolation_forest_.fit(normal_data);
     autoencoder_.train(normal_data, epochs);
+
+    for (const auto& sample : normal_data) {
+        if (recent_normal_samples_.size() >= WARMSTART_POOL_SIZE) {
+            recent_normal_samples_.pop_front();
+        }
+        recent_normal_samples_.push_back(sample);
+    }
+}
+
+void CavitationDetector::setOperatingCondition(const OperatingCondition& cond) {
+    if (!cond_initialized_) {
+        current_cond_ = cond;
+        cond_initialized_ = true;
+        return;
+    }
+
+    if (detectConditionShift(cond)) {
+        current_cond_ = cond;
+
+        if (recent_normal_samples_.size() >= 32) {
+            std::vector<std::vector<float>> warmup_data(
+                recent_normal_samples_.begin(), recent_normal_samples_.end());
+            autoencoder_.warmStart(warmup_data, WARMSTART_EPOCHS);
+        }
+    } else {
+        current_cond_.head = current_cond_.head * 0.95f + cond.head * 0.05f;
+        current_cond_.flow = current_cond_.flow * 0.95f + cond.flow * 0.05f;
+        current_cond_.power = current_cond_.power * 0.95f + cond.power * 0.05f;
+        current_cond_.rpm = current_cond_.rpm * 0.95f + cond.rpm * 0.05f;
+    }
+}
+
+bool CavitationDetector::detectConditionShift(const OperatingCondition& new_cond) {
+    if (!cond_initialized_) return false;
+
+    float head_range = std::max(std::abs(current_cond_.head), 1.0f);
+    float power_range = std::max(std::abs(current_cond_.power), 1.0f);
+
+    float head_shift = std::abs(new_cond.head - current_cond_.head) / head_range;
+    float power_shift = std::abs(new_cond.power - current_cond_.power) / power_range;
+
+    return head_shift > COND_SHIFT_TOLERANCE || power_shift > COND_SHIFT_TOLERANCE;
 }
 
 std::vector<float> CavitationDetector::extractFeatureVector(const SpectrumFeature& feature) {
@@ -357,17 +612,25 @@ std::vector<float> CavitationDetector::extractFeatureVector(const SpectrumFeatur
     return vec;
 }
 
-CavitationStatus CavitationDetector::detect(const SpectrumFeature& feature) {
+CavitationStatus CavitationDetector::detect(const SpectrumFeature& feature,
+                                             const OperatingCondition& cond) {
     CavitationStatus status;
     status.turbine_id = feature.turbine_id;
     status.blade_id = 0;
     status.zone_id = 0;
     status.timestamp_ms = feature.timestamp_ms;
 
+    setOperatingCondition(cond);
+
     std::vector<float> feat_vec = extractFeatureVector(feature);
 
-    float if_score = isolation_forest_.score(feat_vec);
-    float ae_score = autoencoder_.anomalyScore(feat_vec);
+    normalizer_.update(feat_vec, cond);
+    std::vector<float> normalized = normalizer_.hasStats()
+        ? normalizer_.normalize(feat_vec)
+        : feat_vec;
+
+    float if_score = isolation_forest_.score(normalized);
+    float ae_score = autoencoder_.anomalyScore(normalized);
 
     float ensemble_score = 0.6f * if_score + 0.4f * ae_score;
 
@@ -391,18 +654,20 @@ CavitationStatus CavitationDetector::detect(const SpectrumFeature& feature) {
         intensity = std::min(1.0f, intensity * 1.2f);
     }
 
+    adaptive_threshold_.update(intensity);
+
     status.anomaly_score = ensemble_score;
     status.intensity = intensity;
     status.detection_method = DetectionMethod::ENSEMBLE;
 
-    if (intensity < thresholds_.incipient_intensity) {
-        status.stage = CavitationStage::NONE;
-    } else if (intensity < thresholds_.critical_intensity) {
-        status.stage = CavitationStage::INCIPIENT;
-    } else if (intensity < thresholds_.developed_intensity) {
-        status.stage = CavitationStage::CRITICAL;
-    } else {
-        status.stage = CavitationStage::DEVELOPED;
+    status.stage = adaptive_threshold_.classify(intensity);
+
+    detect_count_++;
+    if (status.stage == CavitationStage::NONE && detect_count_ % 10 == 0) {
+        if (recent_normal_samples_.size() >= WARMSTART_POOL_SIZE) {
+            recent_normal_samples_.pop_front();
+        }
+        recent_normal_samples_.push_back(normalized);
     }
 
     return status;

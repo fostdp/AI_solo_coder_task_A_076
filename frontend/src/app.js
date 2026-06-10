@@ -1,6 +1,6 @@
 import { cavitationStageColor, alarmSeverityColor, stageToChineseLabel } from './colorScales.js';
 import { drawTurbineProfile, drawSensorMarkers, drawBladeInfo, hitTestBlade, BLADE_COUNT } from './canvasRenderer.js';
-import { initWaterfallGL, updateWaterfallData, renderWaterfall, drawWaterfallOverlay, cleanupWaterfallGL } from './webglRenderer.js';
+import { initWaterfallGL, updateWaterfallData, renderWaterfall, drawWaterfallOverlay, cleanupWaterfallGL, createWaterfallWorker, MAX_SLICES } from './webglRenderer.js';
 import { generateTurbineStatuses, generateSpectrumData, generateWaterfallData, generateCavitationHistory, generateAlarms, generateFatigueInfo } from './mockData.js';
 
 var state = {
@@ -11,6 +11,8 @@ var state = {
     bladePanelOpen: false,
     alarms: [],
     waterfallGL: null,
+    waterfallWorker: null,
+    waterfallPendingVertex: null,
     waterfallData: [],
     spectrumData: null,
     cavitationHistory: [],
@@ -117,6 +119,11 @@ function stopAnimation() {
         cleanupWaterfallGL(state.waterfallGL);
         state.waterfallGL = null;
     }
+    if (state.waterfallWorker) {
+        state.waterfallWorker.terminate();
+        state.waterfallWorker = null;
+    }
+    state.waterfallPendingVertex = null;
 }
 
 function startAutoRefresh() {
@@ -128,6 +135,7 @@ function startAutoRefresh() {
         } else if (state.currentPage === 'turbine-detail') {
             state.waterfallData = generateWaterfallData(30);
             state.spectrumData = generateSpectrumData();
+            dispatchWaterfallUpdate();
         }
     }, 3000);
 }
@@ -423,9 +431,18 @@ function initWaterfallCanvas() {
     canvas.height = rect.height * dpr;
 
     state.waterfallGL = initWaterfallGL(canvas);
-    if (state.waterfallGL) {
-        updateWaterfallData(state.waterfallGL, state.waterfallData);
+
+    if (state.waterfallWorker) {
+        state.waterfallWorker.terminate();
     }
+    state.waterfallWorker = createWaterfallWorker();
+    state.waterfallWorker.onmessage = function(e) {
+        if (e.data.vertexData) {
+            state.waterfallPendingVertex = new Float32Array(e.data.vertexData);
+        }
+    };
+
+    dispatchWaterfallUpdate();
 
     var overlayCanvas = $('#waterfall-overlay');
     if (overlayCanvas) {
@@ -437,6 +454,10 @@ function initWaterfallCanvas() {
     }
 
     function animateWaterfall() {
+        if (state.waterfallPendingVertex && state.waterfallGL) {
+            updateWaterfallData(state.waterfallGL, null, state.waterfallPendingVertex);
+            state.waterfallPendingVertex = null;
+        }
         if (state.waterfallGL) {
             state.rotationAngle += 0.003;
             renderWaterfall(state.waterfallGL, state.rotationAngle);
@@ -446,6 +467,17 @@ function initWaterfallCanvas() {
         }
     }
     requestAnimationFrame(animateWaterfall);
+}
+
+function dispatchWaterfallUpdate() {
+    if (!state.waterfallWorker || !state.waterfallData || state.waterfallData.length === 0) return;
+
+    var slicesToSend = state.waterfallData.slice(-MAX_SLICES);
+    var transferable = slicesToSend.map(function(s) {
+        return { spectrum: s.spectrum };
+    });
+
+    state.waterfallWorker.postMessage({ slices: transferable });
 }
 
 function initSpectrumCanvas() {

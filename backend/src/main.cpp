@@ -89,7 +89,13 @@ int main(int argc, char* argv[]) {
         ch_writer.writeRawSignal(data);
         ch_writer.writeSpectrumFeature(feature);
 
-        CavitationStatus cav_status = cavitation_detector.detect(feature);
+        OperatingCondition op_cond{};
+        op_cond.head = 0.0f;
+        op_cond.flow = 0.0f;
+        op_cond.rpm = 0.0f;
+        op_cond.power = 0.0f;
+
+        CavitationStatus cav_status = cavitation_detector.detect(feature, op_cond);
         cav_status.turbine_id = data.turbine_id;
 
         {

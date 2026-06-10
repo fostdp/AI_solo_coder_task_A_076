@@ -1,5 +1,3 @@
-import { spectrumColor } from './colorScales.js';
-
 var VERTEX_SHADER_SRC = [
     '#version 300 es',
     'layout(location = 0) in vec3 aPos;',
@@ -110,6 +108,11 @@ function mat4RotateY(angle) {
     ]);
 }
 
+var MAX_SLICES = 60;
+var LOD_NEAR_SLICES = 10;
+var LOD_DOWNSAMPLE = 4;
+var MAX_GPU_VERTICES = 500000;
+
 function initWaterfallGL(canvas) {
     var gl = canvas.getContext('webgl2', { antialias: true, alpha: true });
     if (!gl) {
@@ -126,6 +129,8 @@ function initWaterfallGL(canvas) {
     gl.bindVertexArray(vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
 
+    gl.bufferData(gl.ARRAY_BUFFER, MAX_GPU_VERTICES * 24, gl.DYNAMIC_DRAW);
+
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 24, 0);
 
@@ -140,60 +145,30 @@ function initWaterfallGL(canvas) {
         vao: vao,
         vertexBuffer: vertexBuffer,
         vertexCount: 0,
-        canvas: canvas
+        canvas: canvas,
+        gpuBufferAllocated: MAX_GPU_VERTICES * 24
     };
 }
 
-function updateWaterfallData(glState, waterfallSlices) {
-    if (!glState || !waterfallSlices || waterfallSlices.length === 0) return;
+function updateWaterfallData(glState, waterfallSlices, vertexData) {
+    if (!glState) return;
 
     var gl = glState.gl;
-    var slices = waterfallSlices;
-    var nSlices = slices.length;
-    var nBins = slices[0].spectrum.length;
-    var xScale = 2.0 / nBins;
-    var zScale = 3.0 / nSlices;
-    var yScale = 2.0;
 
-    var vertices = [];
+    if (vertexData && vertexData.byteLength > 0) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, glState.vertexBuffer);
 
-    for (var s = 0; s < nSlices - 1; s++) {
-        var spec0 = slices[s].spectrum;
-        var spec1 = slices[s + 1].spectrum;
-        var z0 = (s - nSlices / 2) * zScale;
-        var z1 = (s + 1 - nSlices / 2) * zScale;
-
-        for (var b = 0; b < nBins - 1; b++) {
-            var x0 = (b - nBins / 2) * xScale;
-            var x1 = (b + 1 - nBins / 2) * xScale;
-
-            var v00y = spec0[b] * yScale;
-            var v10y = spec0[b + 1] * yScale;
-            var v01y = spec1[b] * yScale;
-            var v11y = spec1[b + 1] * yScale;
-
-            var c00 = spectrumColor(spec0[b]);
-            var c10 = spectrumColor(spec0[b + 1]);
-            var c01 = spectrumColor(spec1[b]);
-            var c11 = spectrumColor(spec1[b + 1]);
-
-            vertices.push(
-                x0, v00y, z0, c00.r / 255, c00.g / 255, c00.b / 255,
-                x1, v10y, z0, c10.r / 255, c10.g / 255, c10.b / 255,
-                x0, v01y, z1, c01.r / 255, c01.g / 255, c01.b / 255,
-
-                x1, v10y, z0, c10.r / 255, c10.g / 255, c10.b / 255,
-                x1, v11y, z1, c11.r / 255, c11.g / 255, c11.b / 255,
-                x0, v01y, z1, c01.r / 255, c01.g / 255, c01.b / 255
-            );
+        if (vertexData.byteLength <= glState.gpuBufferAllocated) {
+            gl.bufferSubData(gl.ARRAY_BUFFER, 0, vertexData);
+        } else {
+            gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
+            glState.gpuBufferAllocated = vertexData.byteLength;
         }
+
+        glState.vertexCount = vertexData.byteLength / 24;
+    } else {
+        glState.vertexCount = 0;
     }
-
-    var vertexData = new Float32Array(vertices);
-    gl.bindBuffer(gl.ARRAY_BUFFER, glState.vertexBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
-
-    glState.vertexCount = vertices.length / 6;
 }
 
 function renderWaterfall(glState, rotationAngle) {
@@ -266,10 +241,110 @@ function cleanupWaterfallGL(glState) {
     gl.deleteVertexArray(glState.vao);
 }
 
+function createWaterfallWorker() {
+    var workerCode = [
+        'var MAX_SLICES = 60;',
+        'var LOD_NEAR_SLICES = 10;',
+        'var LOD_DOWNSAMPLE = 4;',
+        '',
+        'function spectrumColor(t) {',
+        '    t = Math.max(0, Math.min(1, t));',
+        '    var stops = [',
+        '        [0.0, 10, 10, 80],',
+        '        [0.15, 0, 50, 180],',
+        '        [0.3, 0, 150, 200],',
+        '        [0.45, 0, 200, 100],',
+        '        [0.6, 180, 220, 30],',
+        '        [0.75, 240, 180, 0],',
+        '        [0.9, 240, 60, 30],',
+        '        [1.0, 200, 30, 200]',
+        '    ];',
+        '    for (var i = 0; i < stops.length - 1; i++) {',
+        '        if (t >= stops[i][0] && t <= stops[i + 1][0]) {',
+        '            var f = (t - stops[i][0]) / (stops[i + 1][0] - stops[i][0]);',
+        '            return {',
+        '                r: (stops[i][1] + f * (stops[i + 1][1] - stops[i][1])) / 255,',
+        '                g: (stops[i][2] + f * (stops[i + 1][2] - stops[i][2])) / 255,',
+        '                b: (stops[i][3] + f * (stops[i + 1][3] - stops[i][3])) / 255',
+        '            };',
+        '        }',
+        '    }',
+        '    return {r: 0.8, g: 0.12, b: 0.8};',
+        '}',
+        '',
+        'self.onmessage = function(e) {',
+        '    var slices = e.data.slices;',
+        '    if (!slices || slices.length === 0) {',
+        '        self.postMessage({vertexData: null, vertexCount: 0}, []);',
+        '        return;',
+        '    }',
+        '',
+        '    while (slices.length > MAX_SLICES) {',
+        '        slices.shift();',
+        '    }',
+        '',
+        '    var nSlices = slices.length;',
+        '    var baseBins = slices[0].spectrum.length;',
+        '    var xScale = 2.0 / baseBins;',
+        '    var zScale = 3.0 / nSlices;',
+        '    var yScale = 2.0;',
+        '',
+        '    var vertexArrays = [];',
+        '',
+        '    for (var s = 0; s < nSlices - 1; s++) {',
+        '        var distFromFront = nSlices - 1 - s;',
+        '        var step = (distFromFront > LOD_NEAR_SLICES) ? LOD_DOWNSAMPLE : 1;',
+        '',
+        '        var spec0 = slices[s].spectrum;',
+        '        var spec1 = slices[s + 1].spectrum;',
+        '        var z0 = (s - nSlices / 2) * zScale;',
+        '        var z1 = (s + 1 - nSlices / 2) * zScale;',
+        '',
+        '        for (var b = 0; b < baseBins - step; b += step) {',
+        '            var bNext = Math.min(b + step, baseBins - 1);',
+        '            var x0 = (b - baseBins / 2) * xScale;',
+        '            var x1 = (bNext - baseBins / 2) * xScale;',
+        '',
+        '            var v00y = spec0[b] * yScale;',
+        '            var v10y = spec0[bNext] * yScale;',
+        '            var v01y = spec1[b] * yScale;',
+        '            var v11y = spec1[bNext] * yScale;',
+        '',
+        '            var c00 = spectrumColor(spec0[b]);',
+        '            var c10 = spectrumColor(spec0[bNext]);',
+        '            var c01 = spectrumColor(spec1[b]);',
+        '            var c11 = spectrumColor(spec1[bNext]);',
+        '',
+        '            vertexArrays.push(',
+        '                x0, v00y, z0, c00.r, c00.g, c00.b,',
+        '                x1, v10y, z0, c10.r, c10.g, c10.b,',
+        '                x0, v01y, z1, c01.r, c01.g, c01.b,',
+        '',
+        '                x1, v10y, z0, c10.r, c10.g, c10.b,',
+        '                x1, v11y, z1, c11.r, c11.g, c11.b,',
+        '                x0, v01y, z1, c01.r, c01.g, c01.b',
+        '            );',
+        '        }',
+        '    }',
+        '',
+        '    var vertexData = new Float32Array(vertexArrays);',
+        '    self.postMessage({vertexData: vertexData.buffer, vertexCount: vertexArrays.length / 6}, [vertexData.buffer]);',
+        '};'
+    ].join('\n');
+
+    var blob = new Blob([workerCode], { type: 'application/javascript' });
+    var url = URL.createObjectURL(blob);
+    var worker = new Worker(url);
+    URL.revokeObjectURL(url);
+    return worker;
+}
+
 export {
     initWaterfallGL,
     updateWaterfallData,
     renderWaterfall,
     drawWaterfallOverlay,
-    cleanupWaterfallGL
+    cleanupWaterfallGL,
+    createWaterfallWorker,
+    MAX_SLICES
 };

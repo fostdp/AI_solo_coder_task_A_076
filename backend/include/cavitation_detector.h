@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <deque>
 #include <memory>
 #include <random>
 #include <vector>
@@ -46,6 +47,75 @@ private:
     std::mt19937 rng_{std::random_device{}()};
 };
 
+struct OperatingCondition {
+    float head;
+    float flow;
+    float rpm;
+    float power;
+};
+
+class FeatureNormalizer {
+public:
+    FeatureNormalizer() = default;
+
+    void update(const std::vector<float>& features, const OperatingCondition& cond);
+    std::vector<float> normalize(const std::vector<float>& features) const;
+    void reset();
+
+    bool hasStats() const { return count_ > 32; }
+
+private:
+    static constexpr size_t HISTORY_SIZE = 512;
+
+    struct ConditionBin {
+        OperatingCondition cond;
+        std::vector<float> mean;
+        std::vector<float> stddev;
+        size_t count{0};
+    };
+
+    std::deque<ConditionBin> bins_;
+    int current_bin_{-1};
+    size_t count_{0};
+    int dim_{0};
+
+    std::vector<float> running_mean_;
+    std::vector<float> running_m2_;
+    std::vector<float> cached_mean_;
+    std::vector<float> cached_std_;
+
+    void updateRunningStats(const std::vector<float>& features);
+    int findOrAddBin(const OperatingCondition& cond);
+};
+
+class AdaptiveThreshold {
+public:
+    AdaptiveThreshold(float base_incipient = 0.3f,
+                      float base_critical = 0.5f,
+                      float base_developed = 0.7f);
+
+    void update(float anomaly_score);
+    CavitationStage classify(float intensity) const;
+
+    float getIncipientThreshold() const;
+    float getCriticalThreshold() const;
+    float getDevelopedThreshold() const;
+
+private:
+    static constexpr size_t WINDOW_SIZE = 512;
+
+    std::deque<float> score_window_;
+    float base_incipient_;
+    float base_critical_;
+    float base_developed_;
+
+    float adaptive_offset_{0.0f};
+
+    void recompute();
+    float meanScore() const;
+    float stdScore() const;
+};
+
 class DeepAutoEncoder {
 public:
     explicit DeepAutoEncoder(int input_dim,
@@ -57,6 +127,7 @@ public:
     DeepAutoEncoder& operator=(const DeepAutoEncoder&) = delete;
 
     void train(const std::vector<std::vector<float>>& data, int epochs = 50);
+    void warmStart(const std::vector<std::vector<float>>& recent_data, int epochs = 5);
     std::vector<float> reconstruct(const std::vector<float>& input);
     float anomalyScore(const std::vector<float>& input);
 
@@ -79,6 +150,10 @@ private:
 
     std::vector<int> encoder_dims_;
     std::vector<int> decoder_dims_;
+
+    std::vector<float> baseline_recon_errors_;
+    float baseline_mean_{0.0f};
+    float baseline_std_{1.0f};
 };
 
 class CavitationDetector {
@@ -99,13 +174,28 @@ public:
     CavitationDetector& operator=(const CavitationDetector&) = delete;
 
     void train(const std::vector<std::vector<float>>& normal_data, int epochs = 50);
-    CavitationStatus detect(const SpectrumFeature& feature);
+    CavitationStatus detect(const SpectrumFeature& feature,
+                            const OperatingCondition& cond = OperatingCondition{});
+
+    void setOperatingCondition(const OperatingCondition& cond);
 
 private:
     std::vector<float> extractFeatureVector(const SpectrumFeature& feature);
+    bool detectConditionShift(const OperatingCondition& new_cond);
 
     Thresholds thresholds_;
     int input_dim_;
     IsolationForest isolation_forest_;
     DeepAutoEncoder autoencoder_;
+    FeatureNormalizer normalizer_;
+    AdaptiveThreshold adaptive_threshold_;
+
+    OperatingCondition current_cond_;
+    bool cond_initialized_{false};
+    static constexpr float COND_SHIFT_TOLERANCE = 0.15f;
+
+    std::deque<std::vector<float>> recent_normal_samples_;
+    static constexpr size_t WARMSTART_POOL_SIZE = 256;
+    static constexpr int WARMSTART_EPOCHS = 5;
+    int detect_count_{0};
 };

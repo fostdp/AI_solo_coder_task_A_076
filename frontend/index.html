@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>水轮机空化噪声监测与寿命评估系统</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+</head>
+<body>
+    <div id="root" class="app-layout">
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-logo">
+                <div class="logo-icon">
+                    <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                        <circle cx="14" cy="14" r="12" stroke="#00D4FF" stroke-width="1.5" fill="none"/>
+                        <path d="M14 6 L14 14 L20 18" stroke="#00D4FF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                        <circle cx="14" cy="14" r="3" fill="#00D4FF" opacity="0.6"/>
+                        <path d="M8 10 Q14 4 20 10" stroke="#00D4FF" stroke-width="1" opacity="0.4" fill="none"/>
+                        <path d="M8 18 Q14 24 20 18" stroke="#00D4FF" stroke-width="1" opacity="0.4" fill="none"/>
+                    </svg>
+                </div>
+                <span class="logo-text">空化监测系统</span>
+            </div>
+            <nav class="sidebar-nav">
+                <a class="nav-item active" data-page="dashboard" href="#dashboard">
+                    <span class="nav-icon">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="3" y="3" width="7" height="7" rx="1"/>
+                            <rect x="14" y="3" width="7" height="7" rx="1"/>
+                            <rect x="3" y="14" width="7" height="7" rx="1"/>
+                            <rect x="14" y="14" width="7" height="7" rx="1"/>
+                        </svg>
+                    </span>
+                    <span class="nav-label">监测总览</span>
+                </a>
+                <a class="nav-item" data-page="alarms" href="#alarms">
+                    <span class="nav-icon">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                            <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                        </svg>
+                    </span>
+                    <span class="nav-label">告警管理</span>
+                </a>
+                <a class="nav-item" data-page="config" href="#config">
+                    <span class="nav-icon">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="3"/>
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                        </svg>
+                    </span>
+                    <span class="nav-label">系统配置</span>
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <a class="nav-item" id="sidebar-toggle" href="javascript:void(0)">
+                    <span class="nav-icon">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="3" y1="12" x2="21" y2="12"/>
+                            <line x1="3" y1="6" x2="21" y2="6"/>
+                            <line x1="3" y1="18" x2="21" y2="18"/>
+                        </svg>
+                    </span>
+                    <span class="nav-label">收起菜单</span>
+                </a>
+            </div>
+        </aside>
+
+        <div class="main-area">
+            <header class="header">
+                <div class="header-left">
+                    <h1 class="header-title" id="header-title">监测总览</h1>
+                </div>
+                <div class="header-right">
+                    <span style="font-size:12px;color:var(--text-muted);font-family:var(--font-mono)" id="system-time"></span>
+                    <button class="header-btn" onclick="location.hash='dashboard'">返回总览</button>
+                </div>
+            </header>
+            <main class="content" id="main-content">
+            </main>
+        </div>
+    </div>
+
+    <script type="module" src="src/app.js"></script>
+    <script>
+        (function() {
+            function updateClock() {
+                var el = document.getElementById('system-time');
+                if (el) {
+                    var now = new Date();
+                    el.textContent = now.getFullYear() + '-' +
+                        String(now.getMonth()+1).padStart(2,'0') + '-' +
+                        String(now.getDate()).padStart(2,'0') + ' ' +
+                        String(now.getHours()).padStart(2,'0') + ':' +
+                        String(now.getMinutes()).padStart(2,'0') + ':' +
+                        String(now.getSeconds()).padStart(2,'0');
+                }
+                requestAnimationFrame(updateClock);
+            }
+            updateClock();
+        })();
+    </script>
+</body>
+</html>
